@@ -27,6 +27,7 @@ Open OpenCode in your project and run `/models-cost`. From the checkout itself, 
 - Type to filter by model or provider. Use **↑** and **↓** to move and **Enter** to inspect prices. **Esc** clears the search, then closes the table.
 - The wide view groups models by provider and shows cache prices and context tiers inline. Narrow terminals use OpenCode’s native picker.
 - In a session, choose **Switch to this model** or **Choose reasoning effort** if the model has variants. Pick **Default** or a named variant to apply the model and effort together. Esc cancels the picker and keeps the current selection. Switching applies to the current session and leaves config files untouched.
+- On the home screen, the same action selects the model and effort for your first prompt.
 
 ![Model details displaying the config override label, base rates, 200k tier, and context limit](docs/images/model-costs-details.png)
 

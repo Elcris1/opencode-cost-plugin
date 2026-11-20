@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui"
 import { CliRenderEvents, InputRenderable, type KeyEvent } from "@opentui/core"
-import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { Show, createEffect, createMemo, createSignal, getOwner, onCleanup } from "solid-js"
 import type { Context as TuiContext } from "@opencode/plugin/tui/context"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import {
@@ -48,6 +48,28 @@ interface ColumnWidths {
 
 /** The row supports more fields than the published type lists; optional access keeps older hosts happy. */
 type CurrentModel = { providerID?: string; modelID?: string }
+
+type SetComposerModel = (row: ModelRow) => void
+const HOME = Symbol("home")
+type SwitchTarget = string | typeof HOME
+
+/** OpenCode 2.3.2 keeps the native model setter in its Solid local context. */
+function findComposerModelSetter(): SetComposerModel | undefined {
+  const contexts = getOwner()?.context
+  if (!contexts) return undefined
+
+  for (const key of Object.getOwnPropertySymbols(contexts)) {
+    const model = contexts[key]?.model
+    if (
+      typeof model?.set === "function" &&
+      typeof model?.selection === "function" &&
+      typeof model?.trackSessionCommit === "function"
+    ) {
+      return (row) => model.set({ providerID: row.providerID, modelID: row.modelID })
+    }
+  }
+  return undefined
+}
 
 interface Palette {
   muted?: string
@@ -263,10 +285,11 @@ export default Plugin.define({
       render: () => <CostBadge context={context} data={data} />,
     }) : undefined
 
-    const resolveSessionID = (): string | undefined => {
+    const resolveSwitchTarget = (): SwitchTarget | undefined => {
       const route = context.ui.router?.current?.() as
         | { type?: string; sessionID?: string; name?: string; params?: { sessionID?: string } }
         | undefined
+      if (route?.type === "home" || route?.name === "home") return HOME
       if (route?.type === "session" && typeof route?.sessionID === "string" && route.sessionID) {
         return route.sessionID
       }
@@ -294,17 +317,62 @@ export default Plugin.define({
       }
     }
 
-    const switchToRow = async (row: ModelRow, sessionID: string, variant?: string) => {
-      if (disposed || resolveSessionID() !== sessionID) return
+    const applyRow = async (
+      row: ModelRow,
+      target: SwitchTarget,
+      setComposerModel: SetComposerModel | undefined,
+      variant?: string,
+    ) => {
+      if (disposed || resolveSwitchTarget() !== target) return
+      const model = `${row.providerID}/${row.modelID}`
+      const selection = variant ? `${model}#${variant}` : model
       try {
-        await switchSessionModel(context.client, sessionID, row, variant)
-        await refreshSessionInfo(sessionID)
+        if (target !== HOME) {
+          await switchSessionModel(context.client, target, row, variant)
+          await refreshSessionInfo(target)
+        }
+        if (disposed || resolveSwitchTarget() !== target) return
+        const modelUI = context.ui.model
+        const hasVariant = (current: { variant?: string } | undefined) =>
+          (current?.variant ?? "default") === (variant ?? "default")
+        const matchesSelection = () => {
+          const current = modelUI?.current?.()
+          return isCurrent(row, current) && hasVariant(current)
+        }
+        if (typeof modelUI?.current === "function" && !matchesSelection()) {
+          // A native picker draft can take precedence over the synced session model.
+          try {
+            if (!isCurrent(row, modelUI.current())) setComposerModel?.(row)
+            const current = modelUI.current()
+            if (isCurrent(row, current) && !hasVariant(current)) modelUI.variant?.set?.(variant)
+          } catch {
+            // The native picker is still available if the host's local context changed.
+          }
+        }
+        if (!matchesSelection() && (target === HOME || typeof modelUI?.current === "function")) {
+          const openPicker = await context.ui.dialog.confirm({
+            title: "Composer model still needs updating",
+            message: [
+              target === HOME
+                ? "OpenCode could not update the model for the next prompt."
+                : `The session saved ${selection}, but the prompt still has a different selection.`,
+              `Choose ${model} in /models${row.variantIDs.length ? ` and select ${variant ?? "Default"} effort` : ""}.`,
+            ].join(" "),
+            label: { confirm: "Open model picker", cancel: "Close" },
+          })
+          if (openPicker && !disposed && resolveSwitchTarget() === target) {
+            context.keymap?.dispatch?.("model.list")
+          }
+          return
+        }
+
         context.ui.toast.show({
-          title: "Model switched",
-          message: `Switched to ${row.providerID}/${row.modelID}${variant ? `#${variant}` : ""}`,
+          title: target === HOME ? "Model selected" : "Model switched",
+          message: target === HOME ? `Selected ${selection} for the next prompt` : `Switched to ${selection}`,
           variant: "success",
         })
       } catch (error) {
+        if (disposed) return
         context.ui.toast.show({
           title: "Model switch failed",
           message: error instanceof Error ? error.message : String(error),
@@ -326,7 +394,11 @@ export default Plugin.define({
         }
       | undefined
 
-    const inspectRow = async (row: ModelRow, sessionID: string | undefined) => {
+    const inspectRow = async (
+      row: ModelRow,
+      target: SwitchTarget | undefined,
+      setComposerModel: SetComposerModel | undefined,
+    ) => {
       const lines = row.tiers.map((tier) =>
         `${tier.tier ? `Over ${fmtK(tier.tier.size)} context` : "Base"}: ${fmtRates(tier)}`,
       )
@@ -337,15 +409,15 @@ export default Plugin.define({
         row.contextLimit ? `Context limit: ${fmtK(row.contextLimit)} tokens` : undefined,
       ].filter(Boolean).join("\n")
       const title = `${row.providerID}/${row.modelID}`
-      if (sessionID && resolveSessionID() === sessionID) {
+      if (target !== undefined && resolveSwitchTarget() === target) {
         const confirmed = await context.ui.dialog.confirm({
           title,
           message,
           label: { confirm: row.variantIDs.length ? "Choose reasoning effort" : "Switch to this model", cancel: "Close" },
         })
-        if (!confirmed || disposed || resolveSessionID() !== sessionID) return
+        if (!confirmed || disposed || resolveSwitchTarget() !== target) return
         if (row.variantIDs.length === 0) {
-          await switchToRow(row, sessionID)
+          await applyRow(row, target, setComposerModel)
           return
         }
         const picked = await context.ui.dialog.select<{ variant?: string }>({
@@ -355,13 +427,14 @@ export default Plugin.define({
             ...row.variantIDs.map((variant) => ({ title: variant, value: { variant } })),
           ],
         })
-        if (picked) await switchToRow(row, sessionID, picked.variant)
+        if (picked) await applyRow(row, target, setComposerModel, picked.variant)
       } else {
         await context.ui.dialog.alert({ title, message })
       }
     }
 
-    const showSelectDialog = async (rows: readonly ModelRow[], sessionID: string | undefined) => {
+    const showSelectDialog = async (rows: readonly ModelRow[], target: SwitchTarget | undefined) => {
+      let setComposerModel: SetComposerModel | undefined
       const picked = await context.ui.dialog.select({
         title: "Model costs · in/out $/1M",
         options: rows.map((row) => {
@@ -373,13 +446,16 @@ export default Plugin.define({
             value: row,
           }
         }),
-        search: (query, options) => options.filter(({ value }) => matchesQuery(value, query.trim().toLowerCase())),
+        search: (query, options) => {
+          setComposerModel ??= findComposerModelSetter()
+          return options.filter(({ value }) => matchesQuery(value, query.trim().toLowerCase()))
+        },
       })
-      if (picked && !disposed) await inspectRow(picked, sessionID)
+      if (picked && !disposed) await inspectRow(picked, target, setComposerModel)
     }
 
     /** The custom table dialog: `ui.dialog.show` + padded text rows. */
-    const showTableDialog = (rows: readonly ModelRow[], sessionID: string | undefined) => {
+    const showTableDialog = (rows: readonly ModelRow[], target: SwitchTarget | undefined) => {
       const lines = buildLines(rows)
       const selectable = selectableIndexes(lines)
       if (selectable.length === 0) {
@@ -437,6 +513,7 @@ export default Plugin.define({
         setViewportTop?.(0)
       }
 
+      let setComposerModel: SetComposerModel | undefined
       let popMode: (() => void) | undefined
       let open = true
 
@@ -464,7 +541,7 @@ export default Plugin.define({
           if (line?.kind !== "model") return
           close()
           opening = true
-          void inspectRow(line.row, sessionID).catch(() => {
+          void inspectRow(line.row, target, setComposerModel).catch(() => {
             if (!disposed) context.ui.toast.show({ message: "Could not open model details.", variant: "error" })
           }).finally(() => { opening = false })
         },
@@ -487,24 +564,27 @@ export default Plugin.define({
       // host's reactive/render context — so the rows get a parent renderable.
       // Pre-creating the element here would mount nothing.
       context.ui.dialog.show(
-        () => (
-          <CostsTable
-            table={filtered}
-            query={query}
-            total={selectable.length}
-            widths={widths}
-            palette={palette}
-            contentWidth={contentWidth}
-            viewportRows={viewportRows}
-            registerViewportTop={(setter) => {
-              setViewportTop = setter
-            }}
-            selected={selectedPos}
-            current={() => (context.ui?.model?.current?.() as CurrentModel | undefined) ?? undefined}
-            controls={dialogControls!}
-            onClosed={close}
-          />
-        ),
+        () => {
+          setComposerModel = findComposerModelSetter()
+          return (
+            <CostsTable
+              table={filtered}
+              query={query}
+              total={selectable.length}
+              widths={widths}
+              palette={palette}
+              contentWidth={contentWidth}
+              viewportRows={viewportRows}
+              registerViewportTop={(setter) => {
+                setViewportTop = setter
+              }}
+              selected={selectedPos}
+              current={() => (context.ui?.model?.current?.() as CurrentModel | undefined) ?? undefined}
+              controls={dialogControls!}
+              onClosed={close}
+            />
+          )
+        },
         close,
       )
       context.ui.dialog.set?.({ size: fitDialogSize([" ".repeat(contentWidth)]) })
@@ -516,7 +596,7 @@ export default Plugin.define({
     const showCostsDialog = async () => {
       if (opening || dialogControls) return
       opening = true
-      const sessionID = resolveSessionID()
+      const target = resolveSwitchTarget()
       try {
         const { rows, configUnavailable, providerPricesUnavailable } = await refresh()
         if (disposed) return
@@ -532,12 +612,12 @@ export default Plugin.define({
         }
         if (typeof context.ui.dialog.show === "function") {
           try {
-            if (showTableDialog(rows, sessionID)) return
+            if (showTableDialog(rows, target)) return
           } catch {
             closeTable()
           }
         }
-        await showSelectDialog(rows, sessionID)
+        await showSelectDialog(rows, target)
       } finally {
         opening = false
       }

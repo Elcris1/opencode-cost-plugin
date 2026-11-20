@@ -425,17 +425,26 @@ Deltas discovered while implementing, verified against the live npm package `@op
 
 ## 13. Integration and pilot changes
 
-The price browser now opens details on Enter. Switching is a separate action available only
-when the session that opened the browser is still active. The router is the source of session
-identity. The footer is enabled by default and can be disabled via `options.footer: false`
+The price browser opens details on Enter. Switching is available when the session that opened
+the browser is still active. On the home screen, switching selects the model and effort for
+the first prompt through the native composer. The session is created on prompt submission.
+The router identifies where the browser was opened.
+
+After a session switch and sync, the plugin checks the composer's selection. OpenCode 2.3.2
+can retain a local composer selection that takes precedence over the saved session model.
+The plugin uses the native model setter when it recognizes the host's Solid context, then
+applies the selected effort through the TUI SDK if needed. If the composer still reports a
+different selection, the plugin offers to open the native model picker.
+
+The footer is enabled by default and can be disabled via `options.footer: false`
 on the CLI plugin entry. The status slot reserves a separate row for base rates below the
 prompt status line, aligned with the prompt's left edge. Cache read and write are included
 when reported and the full line fits.
 The command chooses the native picker when the table does not fit.
 
-For models with named variants, the session details offer an effort picker. It reads the
-variants from the selected model's catalog metadata and applies the model and variant in one
-session switch request. Closing the picker leaves the session selection untouched.
+For models with named variants, the details offer an effort picker using the model's catalog
+metadata. In an active session, the plugin applies the model and variant in one session switch
+request. Closing the picker keeps the current selection.
 
 Rates retain missing values and identify config overrides or catalog rates in details. The
 loader checks config declarations before deciding whether to show the wider configured catalog.
