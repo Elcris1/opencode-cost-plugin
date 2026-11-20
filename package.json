@@ -1,0 +1,23 @@
+{
+  "name": "opencode-model-costs",
+  "version": "0.4.0",
+  "description": "Show per-model cost information (input, output, cache read, cache write per million tokens) resolved from opencode.json in the OpenCode TUI: /models-cost dialog (Enter switches the session model) plus a prompt-footer badge beside the agent/model info.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tui": "./src/tui.tsx"
+  },
+  "files": [
+    "src",
+    "CHANGELOG.md"
+  ],
+  "dependencies": {
+    "@opencode/plugin": "latest"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.8.4",
+    "@opentui/solid": ">=0.8.4",
+    "solid-js": ">=1.9.0"
+  }
+}
