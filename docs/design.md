@@ -427,8 +427,15 @@ Deltas discovered while implementing, verified against the live npm package `@op
 
 The price browser now opens details on Enter. Switching is a separate action available only
 when the session that opened the browser is still active. The router is the source of session
-identity. The footer is opt-in via `options.footer` on the CLI plugin entry, uses the native
-status slot, and shows base input and output rates only. The command chooses the native picker when the table does not fit.
+identity. The footer is enabled by default and can be disabled via `options.footer: false`
+on the CLI plugin entry. The status slot reserves a separate row for base rates below the
+prompt status line, aligned with the prompt's left edge. Cache read and write are included
+when reported and the full line fits.
+The command chooses the native picker when the table does not fit.
+
+For models with named variants, the session details offer an effort picker. It reads the
+variants from the selected model's catalog metadata and applies the model and variant in one
+session switch request. Closing the picker leaves the session selection untouched.
 
 Rates retain missing values and identify config overrides or catalog rates in details. The
 loader checks config declarations before deciding whether to show the wider configured catalog.

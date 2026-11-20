@@ -70,6 +70,20 @@
                 "write": 7.5
               }
             }
+          ],
+          "variants": [
+            {
+              "id": "low",
+              "settings": {
+                "reasoningEffort": "low"
+              }
+            },
+            {
+              "id": "high",
+              "settings": {
+                "reasoningEffort": "high"
+              }
+            }
           ]
         }
       }

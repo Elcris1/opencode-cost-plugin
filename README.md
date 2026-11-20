@@ -26,20 +26,24 @@ Open OpenCode in your project and run `/models-cost`. From the checkout itself, 
 
 - Type to filter by model or provider. Use **↑** and **↓** to move and **Enter** to inspect prices. **Esc** clears the search, then closes the table.
 - The wide view groups models by provider and shows cache prices and context tiers inline. Narrow terminals use OpenCode’s native picker.
-- In a session, choose **Switch to this model** in the details dialog. Opening or closing details leaves the selected model as it was. Switching applies to the current session and leaves config files untouched.
+- In a session, choose **Switch to this model** or **Choose reasoning effort** if the model has variants. Pick **Default** or a named variant to apply the model and effort together. Esc cancels the picker and keeps the current selection. Switching applies to the current session and leaves config files untouched.
 
 ![Model details displaying the config override label, base rates, 200k tier, and context limit](docs/images/model-costs-details.png)
 
-## Enable the optional footer
+![Reasoning effort picker for Demo Large with Default, low, and high options](docs/images/model-costs-effort.png)
 
-The footer shows base input and output rates for the current model. To opt in on OpenCode 2.3.2, add the plugin with the `footer` option to your terminal client’s `cli.json` (typically `~/.config/opencode/cli.json`). Use the same plugin path as in the install step.
+## Configure the footer
+
+By default, the footer shows the current model’s base rates on a separate row below the prompt status line. It includes cache read and write when pricing is available and the line fits. On narrow terminals it shows input and output only. To hide it on OpenCode 2.3.2, set `footer: false` on the plugin entry in your terminal client’s `cli.json` (typically `~/.config/opencode/cli.json`). Use the same plugin path as in the install step.
+
+![Prompt footer showing input, output, cache read, and cache write rates on their own row](docs/images/model-costs-footer.png)
 
 ```json
 {
   "plugins": [
     {
       "package": "/absolute/path/to/opencode-model-costs",
-      "options": { "footer": true }
+      "options": { "footer": false }
     }
   ]
 }

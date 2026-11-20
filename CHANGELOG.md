@@ -3,6 +3,17 @@
 All notable changes to `opencode-model-costs` per released version, newest first.
 On every version bump, add an entry here at the top.
 
+## 0.5.1 — 2026-11-20
+
+- Enabled the price footer by default and restored its own row below the prompt
+  status line. It shows base input, output, cache read, and cache write prices
+  when they fit, with a compact input/output display on narrower terminals.
+  Set `footer: false` in the CLI plugin options to hide it.
+- Added reasoning-effort selection for models with variants. Default or a named
+  variant applies with the model in one session switch. Esc cancels the selection.
+- Added demo variants and refreshed the README captures to show the price table,
+  model details, effort picker, and cache rates in the footer.
+
 ## 0.5.0 — 2026-11-20
 
 - Enter in `/models-cost` opens price details. Switching is a separate action

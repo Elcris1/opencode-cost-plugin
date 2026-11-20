@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui"
-import { InputRenderable, type KeyEvent } from "@opentui/core"
+import { CliRenderEvents, InputRenderable, type KeyEvent } from "@opentui/core"
 import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import type { Context as TuiContext } from "@opencode/plugin/tui/context"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
@@ -237,7 +237,7 @@ export default Plugin.define({
     let disposed = false
     let refreshID = 0
     let opening = false
-    const footer = context.options?.footer === true
+    const footer = context.options?.footer !== false
 
     const refresh = async (): Promise<CostData> => {
       const id = ++refreshID
@@ -294,14 +294,14 @@ export default Plugin.define({
       }
     }
 
-    const switchToRow = async (row: ModelRow, sessionID: string) => {
+    const switchToRow = async (row: ModelRow, sessionID: string, variant?: string) => {
       if (disposed || resolveSessionID() !== sessionID) return
       try {
-        await switchSessionModel(context.client, sessionID, row)
+        await switchSessionModel(context.client, sessionID, row, variant)
         await refreshSessionInfo(sessionID)
         context.ui.toast.show({
           title: "Model switched",
-          message: `Switched to ${row.providerID}/${row.modelID}`,
+          message: `Switched to ${row.providerID}/${row.modelID}${variant ? `#${variant}` : ""}`,
           variant: "success",
         })
       } catch (error) {
@@ -339,9 +339,23 @@ export default Plugin.define({
       const title = `${row.providerID}/${row.modelID}`
       if (sessionID && resolveSessionID() === sessionID) {
         const confirmed = await context.ui.dialog.confirm({
-          title, message, label: { confirm: "Switch to this model", cancel: "Close" },
+          title,
+          message,
+          label: { confirm: row.variantIDs.length ? "Choose reasoning effort" : "Switch to this model", cancel: "Close" },
         })
-        if (confirmed) await switchToRow(row, sessionID)
+        if (!confirmed || disposed || resolveSessionID() !== sessionID) return
+        if (row.variantIDs.length === 0) {
+          await switchToRow(row, sessionID)
+          return
+        }
+        const picked = await context.ui.dialog.select<{ variant?: string }>({
+          title: "Reasoning effort · " + row.modelID,
+          options: [
+            { title: "Default", value: {} },
+            ...row.variantIDs.map((variant) => ({ title: variant, value: { variant } })),
+          ],
+        })
+        if (picked) await switchToRow(row, sessionID, picked.variant)
       } else {
         await context.ui.dialog.alert({ title, message })
       }
@@ -748,6 +762,7 @@ function CostsTable(props: {
 function CostBadge(props: { context: TuiContext; data: () => CostData }) {
   const context = props.context
   const dimensions = useTerminalDimensions()
+  const [footerWidth, setFooterWidth] = createSignal<number>()
 
   // Read inside JSX so both the selected model and the config rows are reactive.
   const badge = () => {
@@ -758,18 +773,46 @@ function CostBadge(props: { context: TuiContext; data: () => CostData }) {
     const providerID = selected?.providerID ?? selected?.provider?.id
     const modelID = selected?.modelID ?? selected?.id ?? selected?.model?.modelID ?? selected?.model?.id
     // Without a routed model (no session started yet) the configured default
-    // is shown, so the prices are beside the provider from startup.
+    // is shown so its prices are visible from startup.
     const row = providerID && modelID ? findRow(rows, providerID, modelID) : rows.find((entry) => entry.isDefault)
     if (!row) return undefined
-    const text = fmtBadge(row)
-    return text && text.length <= dimensions().width / 2 ? text : undefined
+    return fmtBadge(row, dimensions().width - 4) ? row : undefined
   }
 
   const color = () => context.theme?.text?.muted ?? context.theme?.current?.textMuted
 
+  const [offset, setOffset] = createSignal(0)
+
   return (
     <Show when={badge()}>
-      {(price) => <text fg={color()} flexShrink={1} wrapMode="none" truncate>{price()}</text>}
+      {(row) => (
+        <box
+          height={2}
+          minHeight={0}
+          flexShrink={0}
+          ref={(anchor) => {
+            // Reserve a second row without taking width from the host's status items.
+            // Align the badge to the footer's left edge when the slot moves.
+            const align = () => {
+              const footer = anchor.parent
+              if (!footer) return
+              setOffset(anchor.x - footer.x)
+              if (footer.width > 0) setFooterWidth(footer.width)
+            }
+            context.renderer.on(CliRenderEvents.FRAME, align)
+            onCleanup(() => {
+              context.renderer.off(CliRenderEvents.FRAME, align)
+              setFooterWidth(undefined)
+            })
+          }}
+        >
+          <box position="absolute" left={-offset()} top={1}>
+            <text fg={color()} wrapMode="none">
+              {fmtBadge(row(), Math.min(footerWidth() ?? Infinity, dimensions().width - 4))}
+            </text>
+          </box>
+        </box>
+      )}
     </Show>
   )
 }

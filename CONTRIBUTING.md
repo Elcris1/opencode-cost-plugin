@@ -13,8 +13,8 @@ OpenCode loads the TypeScript directly. The root [opencode.json](opencode.json) 
 ## Verify a change
 
 1. Open `/models-cost`. Check the explicit zero and missing cache rate on `demo-small`, the 200k context tier on `demo-large`, and the unavailable rates on `demo-unpriced`.
-2. Filter the list, inspect a row, and close it. Repeat from an active session and check that only **Switch to this model** changes the selected model.
-3. Reopen the command in a narrow terminal to check the native picker. If you touch the footer, opt in using the [README instructions](README.md#enable-the-optional-footer) and check that the rates update after a switch.
+2. Filter the list, inspect a row, and close it. In an active session, choose a named effort for `demo-large` and verify the session uses it. Cancel the effort picker and check that the current model and effort stay selected. Switch to `demo-small` to verify the direct switch for a model without variants.
+3. Reopen the command in a narrow terminal to check the native picker. Check that the footer rates update after a switch and that the [footer off setting](README.md#configure-the-footer) hides it.
 4. Run `/reload` after editing plugin code. Check the OpenCode log for load errors. The default log is `~/.local/share/opencode/log/opencode.log`.
 5. For packaging changes, use `npm pack --dry-run` to inspect the file list. Install a real tarball in a disposable project and open the command before releasing.
 

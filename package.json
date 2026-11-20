@@ -1,6 +1,6 @@
 {
   "name": "opencode-model-costs",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Compare model rates in the OpenCode TUI with an optional prompt footer.",
   "type": "module",
   "license": "MIT",

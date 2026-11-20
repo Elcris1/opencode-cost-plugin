@@ -28,6 +28,7 @@ export interface ModelRow {
   providerSource?: string
   modelID: string
   modelName?: string
+  variantIDs: string[]
   /** Normalized cost tiers, ascending by context threshold. Empty = no cost info at all. */
   tiers: CostTier[]
   /** The model is declared under `providers.*.models.*` in opencode.json(c). */
@@ -105,7 +106,7 @@ async function tryProvidersPayload(client: any, location?: { directory: string }
   }
   for (const model of models) {
     const providerID = str(model?.providerID)
-    const modelID = str(model?.modelID) ?? str(model?.id)
+    const modelID = str(model?.id) ?? str(model?.modelID)
     if (!providerID || !modelID || model.enabled === false) continue
     const group = groups.get(providerID) ?? { id: providerID, name: names.get(providerID), models: Object.create(null) }
     group.models[modelID] = model
@@ -130,9 +131,9 @@ async function tryConfigDocuments(client: any, location?: { directory: string })
  * body `{ model: { providerID, id } }`). Uses the typed client method when
  * available and falls back to the underlying request client otherwise.
  */
-export async function switchSessionModel(client: unknown, sessionID: string, row: ModelRow): Promise<void> {
+export async function switchSessionModel(client: unknown, sessionID: string, row: ModelRow, variant?: string): Promise<void> {
   const anyClient = client as any
-  const model = { providerID: row.providerID, id: row.modelID }
+  const model = { providerID: row.providerID, id: row.modelID, variant }
 
   const typed = anyClient?.session?.switchModel
   if (typeof typed === "function") {
@@ -199,6 +200,7 @@ export async function fetchCostData(client: unknown, location?: { directory: str
           providerSource,
           modelID,
           modelName: str(model?.name),
+          variants: model?.variants,
           cost,
           declaredInConfig: strict,
           costFromConfig: authoredCost != null,
@@ -241,12 +243,20 @@ export async function fetchCostData(client: unknown, location?: { directory: str
   return { rows, hasAuthoredConfig: strict, providerPricesUnavailable: !payload }
 }
 
+function variantIDs(variants: unknown): string[] {
+  const ids = Array.isArray(variants)
+    ? variants.map((variant) => str(variant?.id) ?? str(variant))
+    : variants && typeof variants === "object" ? Object.keys(variants) : []
+  return [...new Set(ids.filter((id): id is string => !!id && id !== "default"))]
+}
+
 function makeRow(input: {
   providerID: string
   providerName: string
   providerSource?: string
   modelID: string
   modelName?: string
+  variants?: unknown
   cost: unknown
   declaredInConfig: boolean
   costFromConfig: boolean
@@ -258,6 +268,7 @@ function makeRow(input: {
     providerSource: input.providerSource,
     modelID: input.modelID,
     modelName: input.modelName,
+    variantIDs: variantIDs(input.variants),
     tiers: normalizeTiers(input.cost),
     declaredInConfig: input.declaredInConfig,
     costFromConfig: input.costFromConfig,
@@ -482,11 +493,17 @@ export function fmtRates(tier: CostTier): string {
   return `${fmtRatesTop(tier)} · ${fmtRatesCache(tier)}`
 }
 
-/** Compact footer summary of base input and output rates. */
-export function fmtBadge(row: ModelRow): string {
+/** Base rates for the footer, with cache rates when they fit. */
+export function fmtBadge(row: ModelRow, width: number): string {
   const base = row.tiers.find((tier) => !tier.tier)
-  if (!base || (base.input === undefined && base.output === undefined)) return ""
-  return `${fmtRatesTop(base)} / 1M tokens`
+  if (!base) return ""
+  const unit = " / 1M tokens"
+  if (base.cache?.read !== undefined || base.cache?.write !== undefined) {
+    const full = fmtRates(base) + unit
+    if (full.length <= width) return full
+  }
+  const compact = fmtRatesTop(base) + unit
+  return (base.input !== undefined || base.output !== undefined) && compact.length <= width ? compact : ""
 }
 
 // ---------------------------------------------------------------------------
