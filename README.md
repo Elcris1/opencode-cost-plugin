@@ -1,35 +1,47 @@
 # opencode-model-costs
 
-An [OpenCode](https://opencode.ai) plugin that shows what your models cost, right in the TUI — the per-model prices you set (or inherit from the catalog) in `opencode.json`, surfaced in two places:
+An [OpenCode](https://opencode.ai) V2 TUI plugin for comparing model rates in USD per million tokens.
 
-1. **`/models-cost` dialog** — a palette + slash command that opens a dialog listing every configured model with its four per-million-token prices on one line: `in $6 · out $22 · cache read $0.55 · cache write $5.5`. Grouped by provider, with the context limit and any extra context tiers on unclipped detail lines. **Enter switches the current session to the selected model** (same session-scoped semantics as the built-in `/models`); Escape closes without switching. The dialog resizes itself to the smallest host size that fits its content.
-2. **Prompt-footer badge** — the current model's four prices on one line on the row directly under the prompt's status row, aligned with the prompt box's left edge. Shown from startup (falling back to the configured default model when no session has started) and updating live when the model changes.
+- **`/models-cost`** opens a searchable price browser. A wide terminal shows a provider-grouped table. A narrow terminal uses OpenCode's native picker. Enter opens the selected model's details, including cache rates, context tiers, and price source. In an active session, **Switch to this model** applies the change to that session.
+- **Optional prompt footer** shows the current model's base input and output rates in one muted line. The plugin leaves configuration files untouched.
 
-Read-only with respect to configuration: the plugin never edits `opencode.json`, and switching a model is session-scoped.
+## Install
 
-## Requirements
+This checkout targets OpenCode 2.3.2. Install the dependencies in the plugin directory with `npm ci`. OpenCode runs the TypeScript sources directly. Use a supported Node version for the OpenTUI peers (`>=26.4.0` for OpenTUI 0.8.4).
 
-- **OpenCode 2.x** (the V2 plugin contract, `@opencode/plugin`). It will not load on the V1 1.x line.
-- Peer dependencies (`@opentui/core`, `@opentui/solid`, `solid-js`) must be resolvable from the plugin folder — run `npm install` inside it once. OpenCode resolves `@opencode/plugin` itself.
+Add the plugin directory to a project's `opencode.json(c)`. Use an absolute path or a path relative to that config file:
 
-## Enable it
-
-Add the plugin's path to a `plugins` entry, either project-local:
-
-```jsonc
-// opencode.json
+```json
 {
-  "plugins": ["C:/projectsia/opencode-model-costs"]
+  "plugins": ["/absolute/path/to/opencode-model-costs"]
 }
 ```
 
-or global (`~/.config/opencode/opencode.json`) to get it in every project. After editing the plugin's own code, `/reload` picks it up without restarting OpenCode.
+To enable the footer on OpenCode 2.3.2, use the options entry in the terminal client's `cli.json` (typically `~/.config/opencode/cli.json`). This host does not pass the server plugin entry's options through to the TUI. For a one-off run, supply the same JSON via `OPENCODE_CLI_CONFIG_CONTENT`. [OpenCode CLI plugin settings](https://opencode.ai/docs/cli/config/#plugins).
+
+```json
+{
+  "plugins": [
+    { "package": "/absolute/path/to/opencode-model-costs", "options": { "footer": true } }
+  ]
+}
+```
+
+## Verify the local integration
+
+This repository's `opencode.json` loads the checkout. Use the CLI option above to exercise the footer. Its two demo providers supply synthetic prices and point to a loopback endpoint. The fixture is for browsing and session selection.
+
+1. From the repository root, run `npm ci` and `npx tsc --noEmit`.
+2. Start `opencode --standalone`, then open `/models-cost`. Global provider declarations may also appear. For a fixture-only run, launch with empty XDG config and data directories.
+3. Check `demo-small` for an explicit `$0` cache-read rate and a dash for missing cache-write pricing. Check `demo-large` for the 200k context tier and `demo-unpriced` for unavailable rates.
+4. Inspect a model on the home screen, then repeat in a session. Closing the details preserves the current model. Choosing **Switch to this model** updates the session and any enabled footer.
+5. Reopen the command in a narrow terminal to check the picker. Run `/reload` after editing the plugin and check the OpenCode log for load errors.
 
 ## Where the prices come from
 
 Costs are resolved by the OpenCode server from `opencode.json(c)` — merged over the provider catalog's defaults — with `{env:}`/`{file:}` substitutions and config precedence applied. The plugin never reads config files itself.
 
-Scope: when at least one provider is authored in `opencode.json(c)`, only the models declared there are listed; when nothing is authored, all configured providers are listed, so `/connect`-only setups still get cost visibility. Models with no explicit cost show `cost not set (catalog default)`.
+Scope: when at least one provider is authored in `opencode.json(c)`, only the models declared there are listed; when nothing is authored, all configured providers are listed, so `/connect`-only setups still get cost visibility. Models can inherit a catalog rate. A dash indicates an unavailable rate, and `$0` indicates a reported zero.
 
 The `cost` shape it understands (both the V2 `providers` key and the deprecated V1 `provider` key):
 

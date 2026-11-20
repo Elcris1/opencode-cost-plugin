@@ -1,7 +1,9 @@
+/** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui"
-import { BoxRenderable, CliRenderEvents, InputRenderable, type KeyEvent } from "@opentui/core"
-import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
-import { useKeyboard } from "@opentui/solid"
+import { InputRenderable, type KeyEvent } from "@opentui/core"
+import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import type { Context as TuiContext } from "@opencode/plugin/tui/context"
+import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import {
   type CostData,
   type CostTier,
@@ -9,41 +11,13 @@ import {
   fetchCostData,
   findRow,
   fitDialogSize,
+  fitsDialogWidth,
   fmtBadge,
   fmtK,
   fmtMoney,
-  fmtRow,
-  fmtRowDetails,
+  fmtRates,
   switchSessionModel,
 } from "./costs"
-
-/**
- * TUI part of opencode-model-costs.
- *
- * - `/models-cost` (palette + slash, the only name): a custom modal
- *   (`ui.dialog.show`) rendering the model list as a monospace table built
- *   from plain text rows (the same primitives as the footer badge): provider
- *   section rows, one row per model with right-aligned money columns
- *   ("in / out / read / write", $/Mtok), the context limit, and a dim
- *   sub-row per extra pricing tier. Row markers: ▶ cursor, ★ configured
- *   default, ● current session model. Keys are read with `useKeyboard`
- *   (renderer-level events, no keymap-bind parsing): typing filters the list
- *   in place through a focused search input (the same `InputRenderable` the
- *   host's picker uses — native full-cell block cursor + "Search models"
- *   placeholder), up/down (home/end, pageup/pagedown) move, enter switches the
- *   session model, escape clears the filter then closes. An exclusive keymap
- *   mode is pushed while the dialog is open so host bindings don't act on keys
- *   meant for the dialog. Hosts without `ui.dialog.show` fall back to the
- *   built-in `dialog.select` list.
- * - On Enter the active session is switched to the picked model; the session's
- *   info is re-synced afterwards so the change applies even for a session that
- *   has not been prompted yet, then the model's reasoning-effort options (its
- *   variants) are offered in a follow-up select dialog.
- * - Prompt-footer badge: the four prices on one line on the row directly
- *   under the prompt's status row, aligned with the prompt box's left edge.
- *   Shown from startup (falling back to the configured default model when
- *   no session has started) and updating live when the model changes.
- */
 
 // ---------------------------------------------------------------------------
 // Table dialog — line model
@@ -80,8 +54,6 @@ interface Palette {
   accent?: string
   /** Search-input caret color (theme form-field focused text). */
   cursor?: string
-  /** Focused search-input background (theme form-field focused background). */
-  inputBg?: string
   /** Focused search-input text (theme form-field base text). */
   inputText?: string
 }
@@ -99,7 +71,7 @@ function moneyFor(line: LineData): [string, string, string, string] {
 /** "in $6 · out $22 · cache read $0.55 · cache write $5.5" as four column values ("—" when absent). */
 function moneyValues(tier: CostTier | undefined): [string, string, string, string] {
   if (!tier) return ["—", "—", "—", "—"]
-  return [fmtMoney(tier.input), fmtMoney(tier.output), fmtMoney(tier.cache?.read ?? 0), fmtMoney(tier.cache?.write ?? 0)]
+  return [fmtMoney(tier.input), fmtMoney(tier.output), fmtMoney(tier.cache?.read), fmtMoney(tier.cache?.write)]
 }
 
 /** The model-column text of a line. */
@@ -110,7 +82,10 @@ function modelCell(line: LineData): string {
     const size = line.tier.tier?.size
     return size && size > 0 ? `↳ over ${fmtK(size)} ctx` : `↳ tier ${line.index + 1}`
   }
-  if (line.kind === "model") return line.row.modelID
+  if (line.kind === "model") {
+    const threshold = line.row.tiers[0]?.tier?.size
+    return threshold ? `${line.row.modelID} · over ${fmtK(threshold)} ctx` : line.row.modelID
+  }
   return ""
 }
 
@@ -125,10 +100,10 @@ function buildLines(rows: readonly ModelRow[]): LineData[] {
   const lines: LineData[] = [{ kind: "header" }, { kind: "rule" }, { kind: "spacer" }]
   let lastProvider: string | undefined
   for (const row of rows) {
-    if (row.providerName !== lastProvider) {
+    if (row.providerID !== lastProvider) {
       if (lastProvider !== undefined) lines.push({ kind: "spacer" })
       lines.push({ kind: "provider", name: row.providerName })
-      lastProvider = row.providerName
+      lastProvider = row.providerID
     }
     lines.push({ kind: "model", row })
     lines.push(...tierLines(row))
@@ -243,10 +218,10 @@ function filterLines(lines: readonly LineData[], query: string): FilteredTable {
   let lastProvider: string | undefined
   for (const line of lines) {
     if (line.kind !== "model" || !matchesQuery(line.row, needle)) continue
-    if (line.row.providerName !== lastProvider) {
+    if (line.row.providerID !== lastProvider) {
       if (lastProvider !== undefined) out.push({ kind: "spacer" })
       out.push({ kind: "provider", name: line.row.providerName })
-      lastProvider = line.row.providerName
+      lastProvider = line.row.providerID
     }
     selectable.push(out.length)
     out.push(line)
@@ -255,51 +230,38 @@ function filterLines(lines: readonly LineData[], query: string): FilteredTable {
   return { lines: out, selectable }
 }
 
-// The host row supports more fields than the published type lists (`details`,
-// `searchText`); the select API passes options through untouched, so they are
-// handed over with a cast.
-type RowOption = {
-  readonly title: string
-  readonly value: ModelRow
-  readonly description?: string
-  readonly details?: string[]
-  readonly searchText?: string
-  readonly category?: string
-}
-
 export default Plugin.define({
   id: "opencode-model-costs.tui",
   setup(context) {
     const [data, setData] = createSignal<CostData>({ rows: [], hasAuthoredConfig: false })
-    let lastSessionID: string | undefined
+    let disposed = false
+    let refreshID = 0
+    let opening = false
+    const footer = context.options?.footer === true
 
-    const refresh = async () => {
-      try {
-        setData(await fetchCostData(context.client))
-      } catch {
-        setData({ rows: [], hasAuthoredConfig: false })
-      }
+    const refresh = async (): Promise<CostData> => {
+      const id = ++refreshID
+      const result = await fetchCostData(context.client, context.location).catch(() => ({
+        rows: [], hasAuthoredConfig: false, configUnavailable: true,
+      }))
+      if (!disposed && id === refreshID) setData(result)
+      return result
     }
-    void refresh()
+    if (footer) void refresh()
 
     let stopConfigChanged: (() => void) | undefined
     try {
-      stopConfigChanged = context.data.on("config.updated" as never, () => {
-        void refresh()
+      stopConfigChanged = context.data.on("config.updated", () => {
+        if (footer) void refresh()
       })
     } catch {
       // Event type unavailable on this server — the command always reads fresh data anyway.
     }
 
-    // Prompt-footer badge; also remembers the active session for the command's
-    // switch fallback when the router lookup is unavailable.
-    const unregisterSlot = context.ui.slot?.({
+    const unregisterSlot = footer ? context.ui.slot?.({
       append: "prompt.footer.status",
-      render: (slot: { sessionID?: string }) => {
-        if (typeof slot?.sessionID === "string" && slot.sessionID) lastSessionID = slot.sessionID
-        return <CostBadge context={context} data={data} />
-      },
-    })
+      render: () => <CostBadge context={context} data={data} />,
+    }) : undefined
 
     const resolveSessionID = (): string | undefined => {
       const route = context.ui.router?.current?.() as
@@ -312,7 +274,7 @@ export default Plugin.define({
       if (route?.name === "session" && typeof route?.params?.sessionID === "string" && route.params.sessionID) {
         return route.params.sessionID
       }
-      return lastSessionID
+      return undefined
     }
 
     /**
@@ -332,57 +294,8 @@ export default Plugin.define({
       }
     }
 
-    /**
-     * The session's model is now the picked one — offer its reasoning effort
-     * levels (the model's variants, same choices as the built-in picker's
-     * variant dialog). Escape keeps the model default.
-     */
-    const showEffortDialog = async (row: ModelRow) => {
-      try {
-        const modelAPI = (context as any).ui?.model
-        const variantAPI = modelAPI?.variant
-        if (
-          !modelAPI ||
-          !variantAPI ||
-          typeof variantAPI.list !== "function" ||
-          typeof variantAPI.set !== "function" ||
-          typeof context.ui.dialog?.select !== "function"
-        )
-          return
-        const variants = (variantAPI.list() as readonly string[] | undefined)
-          ?.filter((variant) => variant !== "default") ?? []
-        if (variants.length === 0) return
-        const current = modelAPI.current?.() as
-          | { providerID?: string; modelID?: string; variant?: string }
-          | undefined
-        if (!current || current.providerID !== row.providerID || current.modelID !== row.modelID) return
-        const DEFAULT = "default"
-        const picked = await context.ui.dialog.select<string>({
-          title: `Reasoning effort — ${row.providerID}/${row.modelID}`,
-          options: [
-            { title: "Default (model default)", value: DEFAULT },
-            ...variants.map((variant) => ({ title: variant, value: variant })),
-          ],
-          current: current.variant ?? DEFAULT,
-        })
-        if (picked === undefined) return // escape — kept the current effort
-        variantAPI.set(picked === DEFAULT ? undefined : picked)
-      } catch {
-        // Best-effort affordance: the switch already happened; effort stays untouched.
-      }
-    }
-
-    /** Switches the current session to the picked model, with the usual toasts. */
-    const switchToRow = async (row: ModelRow) => {
-      const sessionID = resolveSessionID()
-      if (!sessionID) {
-        context.ui.toast.show({
-          title: "Model costs",
-          message: "No active session — showing costs only. Open a session to switch models.",
-          variant: "info",
-        })
-        return
-      }
+    const switchToRow = async (row: ModelRow, sessionID: string) => {
+      if (disposed || resolveSessionID() !== sessionID) return
       try {
         await switchSessionModel(context.client, sessionID, row)
         await refreshSessionInfo(sessionID)
@@ -391,7 +304,6 @@ export default Plugin.define({
           message: `Switched to ${row.providerID}/${row.modelID}`,
           variant: "success",
         })
-        await showEffortDialog(row)
       } catch (error) {
         context.ui.toast.show({
           title: "Model switch failed",
@@ -414,33 +326,46 @@ export default Plugin.define({
         }
       | undefined
 
-    /** Fallback for hosts without `ui.dialog.show`: the built-in select list. */
-    const showSelectDialog = async (rows: readonly ModelRow[]) => {
-      const options = rows.map(
-        (row): RowOption => ({
-          title: `${row.providerID}/${row.modelID}${row.isDefault ? "  ★" : ""}`,
-          description: fmtRow(row),
-          details: fmtRowDetails(row),
-          searchText: `${row.providerID} ${row.providerName} ${row.modelID} ${row.modelName ?? ""}`,
-          category: row.providerName,
-          value: row,
-        }),
+    const inspectRow = async (row: ModelRow, sessionID: string | undefined) => {
+      const lines = row.tiers.map((tier) =>
+        `${tier.tier ? `Over ${fmtK(tier.tier.size)} context` : "Base"}: ${fmtRates(tier)}`,
       )
-      const widest = options.reduce((max, option) => {
-        const lines = [`${option.title} ${option.description ?? ""}`, ...(option.details ?? []), option.category ?? ""]
-        return Math.max(max, ...lines.map((line) => line.length))
-      }, 0)
-      const selection = context.ui.dialog.select({
-        title: "Model costs — $/Mtok · Enter switches",
-        options,
+      const source = row.tiers.length === 0 ? "Rates unavailable" : row.costFromConfig ? "Config override" : "Catalog rate"
+      const message = [
+        `${source} · USD per million tokens`,
+        ...lines,
+        row.contextLimit ? `Context limit: ${fmtK(row.contextLimit)} tokens` : undefined,
+      ].filter(Boolean).join("\n")
+      const title = `${row.providerID}/${row.modelID}`
+      if (sessionID && resolveSessionID() === sessionID) {
+        const confirmed = await context.ui.dialog.confirm({
+          title, message, label: { confirm: "Switch to this model", cancel: "Close" },
+        })
+        if (confirmed) await switchToRow(row, sessionID)
+      } else {
+        await context.ui.dialog.alert({ title, message })
+      }
+    }
+
+    const showSelectDialog = async (rows: readonly ModelRow[], sessionID: string | undefined) => {
+      const picked = await context.ui.dialog.select({
+        title: "Model costs · in/out $/1M",
+        options: rows.map((row) => {
+          const base = row.tiers.find((tier) => !tier.tier)
+          return {
+            title: row.modelID,
+            description: base ? `${fmtMoney(base.input)}/${fmtMoney(base.output)}` : row.tiers.length ? "Tiered" : "—",
+            category: row.providerName,
+            value: row,
+          }
+        }),
+        search: (query, options) => options.filter(({ value }) => matchesQuery(value, query.trim().toLowerCase())),
       })
-      context.ui.dialog.set?.({ size: fitDialogSize([" ".repeat(widest)]) })
-      const picked = await selection
-      if (picked) await switchToRow(picked)
+      if (picked && !disposed) await inspectRow(picked, sessionID)
     }
 
     /** The custom table dialog: `ui.dialog.show` + padded text rows. */
-    const showTableDialog = (rows: readonly ModelRow[]) => {
+    const showTableDialog = (rows: readonly ModelRow[], sessionID: string | undefined) => {
       const lines = buildLines(rows)
       const selectable = selectableIndexes(lines)
       if (selectable.length === 0) {
@@ -459,7 +384,6 @@ export default Plugin.define({
               base?: string
               formfield?: { selected?: string; focused?: string; base?: string }
             }
-            background?: { formfield?: { focused?: string } }
             primary?: string
             current?: { textMuted?: string; primary?: string }
           }
@@ -468,14 +392,14 @@ export default Plugin.define({
         muted: theme?.text?.muted ?? theme?.current?.textMuted,
         accent: theme?.primary ?? theme?.current?.primary ?? "#7aa2f7",
         cursor: theme?.text?.formfield?.focused ?? theme?.text?.formfield?.selected ?? theme?.text?.muted ?? theme?.current?.textMuted,
-        inputBg: theme?.background?.formfield?.focused,
         inputText: theme?.text?.formfield?.base ?? theme?.text?.muted,
       }
 
       const widths = computeWidths(lines)
       const contentWidth = widths.total
+      if (!fitsDialogWidth(contentWidth, context.renderer?.width ?? 0)) return false
       const totalLines = lines.length
-      const viewportRows = Math.min(totalLines, MAX_VIEWPORT_ROWS)
+      const viewportRows = Math.max(1, Math.min(totalLines, MAX_VIEWPORT_ROWS, (context.renderer?.height ?? 30) - 14))
 
       // The cursor and search-query state live here (outside the component) so
       // the key handlers and the rendered list share it. Plain signals need no
@@ -523,8 +447,12 @@ export default Plugin.define({
         confirm: () => {
           const current = filtered()
           const line = current.lines[current.selectable[selectedPos()]]
+          if (line?.kind !== "model") return
           close()
-          if (line?.kind === "model") void switchToRow(line.row)
+          opening = true
+          void inspectRow(line.row, sessionID).catch(() => {
+            if (!disposed) context.ui.toast.show({ message: "Could not open model details.", variant: "error" })
+          }).finally(() => { opening = false })
         },
         query: applyQuery,
         close,
@@ -566,36 +494,38 @@ export default Plugin.define({
         close,
       )
       context.ui.dialog.set?.({ size: fitDialogSize([" ".repeat(contentWidth)]) })
+      return true
     }
 
+    const closeTable = () => dialogControls?.close()
+
     const showCostsDialog = async () => {
-      if (dialogControls) return // already open
-      if (data().rows.length === 0) await refresh()
-      const { rows } = data()
-
-      if (rows.length === 0) {
-        context.ui.toast.show({
-          title: "Model costs",
-          message:
-            "No configured providers or models found. Declare providers.*.models.* (with cost) in opencode.json, or connect a provider.",
-          variant: "warning",
-        })
-        return
-      }
-
-      if (typeof context.ui.dialog.show !== "function") {
-        await showSelectDialog(rows)
-        return
-      }
+      if (opening || dialogControls) return
+      opening = true
+      const sessionID = resolveSessionID()
       try {
-        showTableDialog(rows)
-      } catch {
-        // Anything thrown while opening the custom dialog (unsupported host
-        // behavior) degrades to the select list.
-        try {
-          ;(dialogControls as { close(): void } | undefined)?.close()
-        } catch {}
-        await showSelectDialog(rows)
+        const { rows, configUnavailable, providerPricesUnavailable } = await refresh()
+        if (disposed) return
+        if (configUnavailable || rows.length === 0) {
+          await context.ui.dialog.alert({
+            title: "Model costs",
+            message: configUnavailable
+              ? "Could not read OpenCode configuration. Reopen Model costs to retry."
+              : providerPricesUnavailable ? "Could not load configured providers. Reopen Model costs to retry."
+                : "No models found in the configured providers.",
+          })
+          return
+        }
+        if (typeof context.ui.dialog.show === "function") {
+          try {
+            if (showTableDialog(rows, sessionID)) return
+          } catch {
+            closeTable()
+          }
+        }
+        await showSelectDialog(rows, sessionID)
+      } finally {
+        opening = false
       }
     }
 
@@ -614,6 +544,7 @@ export default Plugin.define({
     }))
 
     return () => {
+      disposed = true
       try {
         dialogControls?.close()
       } catch {}
@@ -761,21 +692,22 @@ function CostsTable(props: {
 
   onCleanup(props.onClosed)
 
-  // Padded + centered: the inner block keeps its exact table width (so the
-  // columns stay aligned) while the outer box centers it horizontally in the
-  // dialog and adds the left/bottom insets.
+  const tableHeight = () => table().selectable.length ? Math.min(table().lines.length, props.viewportRows) : 1
+
   return (
-    <box flexDirection="column" width="100%" alignItems="center" paddingLeft={2} paddingBottom={2}>
-      <box flexDirection="column" width={props.contentWidth + 1}>
-        <box flexDirection="row" justifyContent="space-between">
+    <box flexDirection="column" width="100%" alignItems="center" paddingTop={1} paddingBottom={2}>
+      <box flexDirection="column" width={props.contentWidth}>
+        <box flexDirection="row" columnGap={3} marginBottom={1}>
           <input
             flexGrow={1}
+            minWidth={0}
+            backgroundColor="transparent"
             onInput={(value) => props.controls.query(value)}
             placeholder="Search models"
             placeholderColor={props.palette.muted}
             cursorColor={props.palette.cursor ?? props.palette.accent}
             cursorStyle={{ style: "block", blinking: true }}
-            focusedBackgroundColor={props.palette.inputBg}
+            focusedBackgroundColor="transparent"
             focusedTextColor={props.palette.inputText ?? props.palette.accent}
             ref={(renderable) => {
               input = renderable
@@ -793,28 +725,29 @@ function CostsTable(props: {
               : `${props.total} model${props.total === 1 ? "" : "s"}`}
           </text>
         </box>
-        <box flexDirection="column" height={props.viewportRows}>
+        <box flexDirection="column" height={tableHeight()} marginBottom={1}>
           {table().selectable.length === 0 ? (
             <text fg={props.palette.muted} wrapMode="none">
-              no matching models
+              No matching models
             </text>
           ) : (
             visible()
           )}
         </box>
         <text fg={props.palette.muted} wrapMode="none">
-          {"type to filter · ↑↓ move · enter switch · esc clear/close"}
+          {"↑↓ Move · Enter details · Esc close"}
         </text>
         <text fg={props.palette.muted} wrapMode="none">
-          {"$/Mtok · ★ default · ● current"}
+          {"USD / 1M tokens · ★ Default · ● Current"}
         </text>
       </box>
     </box>
   )
 }
 
-function CostBadge(props: { context: any; data: () => CostData }) {
+function CostBadge(props: { context: TuiContext; data: () => CostData }) {
   const context = props.context
+  const dimensions = useTerminalDimensions()
 
   // Read inside JSX so both the selected model and the config rows are reactive.
   const badge = () => {
@@ -828,60 +761,15 @@ function CostBadge(props: { context: any; data: () => CostData }) {
     // is shown, so the prices are beside the provider from startup.
     const row = providerID && modelID ? findRow(rows, providerID, modelID) : rows.find((entry) => entry.isDefault)
     if (!row) return undefined
-    return fmtBadge(row)
+    const text = fmtBadge(row)
+    return text && text.length <= dimensions().width / 2 ? text : undefined
   }
 
   const color = () => context.theme?.text?.muted ?? context.theme?.current?.textMuted
 
-  // The price line renders on the row below the footer, aligned with the
-  // prompt box's left edge. The anchor box keeps the footer row's height plus
-  // the reserved row under it, while the line overlays that reserved row —
-  // absolute positioning takes it out of the flex flow, so the directory,
-  // file and usage labels keep their exact layout. The overlay's left is
-  // relative to the anchor, which the flex row places right of the growing
-  // location label. `anchor.x` is the anchor's absolute screen x, so shifting
-  // by it alone would land the line on the terminal's column 0 — right of
-  // nothing on the home screen, but left of the prompt panel in a session,
-  // where the tab rail and the route's padding sit, and there hidden. Shift
-  // by the anchor's offset inside its parent (the footer row, which starts
-  // exactly at the prompt box's left edge) so the line hugs the prompt box
-  // on every route.
-  const [offset, setOffset] = createSignal(0)
-  let anchor: BoxRenderable | undefined
-
-  onMount(() => {
-    const renderer = props.context.renderer
-    const track = () => {
-      if (!anchor || anchor.isDestroyed) return
-      const row = anchor.parent
-      setOffset(row && !row.isDestroyed ? anchor.x - row.x : anchor.x)
-    }
-    renderer.on(CliRenderEvents.FRAME, track)
-    onCleanup(() => {
-      try {
-        renderer.off(CliRenderEvents.FRAME, track)
-      } catch {}
-    })
-  })
-
   return (
     <Show when={badge()}>
-      {(text) => (
-        <box
-          ref={(node) => {
-            anchor = node
-          }}
-          height={2}
-          minHeight={0}
-          flexShrink={0}
-        >
-          <box position="absolute" left={-offset()} top={1}>
-            <text fg={color()} wrapMode="none">
-              {text()}
-            </text>
-          </box>
-        </box>
-      )}
+      {(price) => <text fg={color()} flexShrink={1} wrapMode="none" truncate>{price()}</text>}
     </Show>
   )
 }

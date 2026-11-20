@@ -3,6 +3,22 @@
 All notable changes to `opencode-model-costs` per released version, newest first.
 On every version bump, add an entry here at the top.
 
+## 0.5.0 — 2026-11-20
+
+- Enter in `/models-cost` opens price details. Switching is a separate action
+  available only for the active session that opened the browser.
+- The wide table has a transparent search field and more space around the
+  results and keyboard hints. Narrow terminals use OpenCode’s native picker.
+- Price details identify config overrides and catalog rates. Missing prices
+  show a dash, explicit zeroes show `$0`, and a failed config read shows a
+  retry message.
+- The prompt footer is opt-in through CLI settings and shows one muted line of
+  base input and output rates.
+- Added a project-local demo config with synthetic rates for two providers,
+  plus the integration instructions and release plan.
+- Pinned the tested OpenCode 2.3.2 dependencies, consolidated on the npm lockfile,
+  added the MIT license, and made the JSX runtime explicit for tarball installs.
+
 ## 0.4.0 — 2026-11-18
 
 - `/models-cost` now renders as a monospace table in a custom modal (`ui.dialog.show`, built from

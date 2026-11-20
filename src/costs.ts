@@ -1,32 +1,23 @@
 /**
  * Data layer for opencode-model-costs.
  *
- * Collects the model/provider cost information that OpenCode resolves from
- * opencode.json(c) and formats it for display. Two server endpoints are used,
- * both best-effort so the plugin degrades gracefully across SDK versions:
+ * Reads pricing and authoring facts through OpenCode's client. V2 exposes
+ * effective model data through model.list() and provider.list(). Older
+ * clients can supply the same data via config.providers().
  *
- * - `client.config.providers()` ("List config providers") — the configured
- *   providers with their model catalogs: merged cost (config overrides on top
- *   of catalog defaults), display names, and the default-model map.
- * - `client.config.get()` ("Get configuration") — the user-authored
- *   configuration documents, i.e. what is literally written in
- *   opencode.json(c) across config locations. Used to decide which models are
- *   *declared* in config, which costs were explicitly *set* in config, and the
- *   configured default model.
- *
- * Scope: when at least one provider is authored in opencode.json(c), only the
- * models declared there are listed (costs still merged with catalog defaults).
- * When nothing is authored, the configured providers are listed instead so the
- * dialog is never pointlessly empty for /connect-only setups.
+ * config.get() identifies the declared models and explicit price overrides.
+ * When any provider is declared, the browser lists only declared models.
+ * A successful read with no declarations lets the browser show the configured
+ * catalog. A failed config read leaves the scope unknown.
  */
 
 export interface CostTier {
   /** When set, this price applies to prompts over `size` context tokens. */
   tier?: { type: "context"; size: number }
   /** USD per million input tokens. */
-  input: number
+  input?: number
   /** USD per million output tokens. */
-  output: number
+  output?: number
   cache?: { read?: number; write?: number }
 }
 
@@ -51,6 +42,8 @@ export interface CostData {
   rows: ModelRow[]
   /** True when at least one provider/model is authored in opencode.json(c). */
   hasAuthoredConfig: boolean
+  configUnavailable?: boolean
+  providerPricesUnavailable?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -74,40 +67,61 @@ function errorText(error: unknown): string {
 }
 
 /** Generated SDK methods differ in whether they require an input object. */
-async function callFlexible(fn: (...args: any[]) => any): Promise<any> {
+async function callFlexible(fn: (...args: any[]) => any, location?: { directory: string }): Promise<any> {
   try {
-    return await fn({})
+    return await fn(location ? { location } : {})
   } catch {
     return await fn()
   }
 }
 
-async function tryProvidersPayload(client: any): Promise<{ providers: any[]; default: Record<string, string> } | undefined> {
+async function tryRead(api: any, method: string, location?: { directory: string }): Promise<any> {
   try {
-    const providers = client?.config?.providers
-    if (typeof providers !== "function") return undefined
-    const data = unwrapResult(await callFlexible(providers.bind(client.config)))
-    if (data && Array.isArray(data.providers)) return data
+    const read = api?.[method]
+    if (typeof read === "function") return unwrapResult(await callFlexible(read.bind(api), location))
   } catch {
-    // best-effort
+    // A missing or failed endpoint must not prevent the remaining reads.
   }
   return undefined
 }
 
-/** Returns config documents, lowest → highest priority. Older servers return a single merged config object. */
-async function tryConfigDocuments(client: any): Promise<any[]> {
-  try {
-    const get = client?.config?.get
-    if (typeof get !== "function") return []
-    const data = unwrapResult(await callFlexible(get.bind(client.config)))
-    if (Array.isArray(data)) {
-      return data.filter((entry: any) => entry && entry.type === "document" && entry.info && typeof entry.info === "object")
-    }
-    if (data && typeof data === "object") return [{ type: "document", info: data }]
-  } catch {
-    // best-effort
+async function tryProvidersPayload(client: any, location?: { directory: string }): Promise<{
+  providers: any[]
+  default?: Record<string, string>
+} | undefined> {
+  const legacy = await tryRead(client?.config, "providers", location)
+  if (Array.isArray(legacy?.providers)) return legacy
+
+  const [models, providers] = await Promise.all([
+    tryRead(client?.model, "list", location),
+    tryRead(client?.provider, "list", location),
+  ])
+  if (!Array.isArray(models)) return undefined
+
+  const groups = new Map<string, { id: string; name?: string; models: Record<string, unknown> }>()
+  const names = new Map<string, string>()
+  for (const provider of Array.isArray(providers) ? providers : []) {
+    if (typeof provider?.id === "string" && typeof provider.name === "string") names.set(provider.id, provider.name)
   }
-  return []
+  for (const model of models) {
+    const providerID = str(model?.providerID)
+    const modelID = str(model?.modelID) ?? str(model?.id)
+    if (!providerID || !modelID || model.enabled === false) continue
+    const group = groups.get(providerID) ?? { id: providerID, name: names.get(providerID), models: Object.create(null) }
+    group.models[modelID] = model
+    groups.set(providerID, group)
+  }
+  return { providers: [...groups.values()] }
+}
+
+/** Returns config documents, lowest → highest priority. Older servers return a single merged config object. */
+async function tryConfigDocuments(client: any, location?: { directory: string }): Promise<any[] | undefined> {
+  const data = await tryRead(client?.config, "get", location)
+  if (Array.isArray(data)) {
+    return data.filter((entry: any) => entry?.type === "document" && entry.info && typeof entry.info === "object")
+  }
+  if (data && typeof data === "object") return [{ type: "document", info: data }]
+  return undefined
 }
 
 /**
@@ -145,10 +159,10 @@ export async function switchSessionModel(client: unknown, sessionID: string, row
 // Collection
 // ---------------------------------------------------------------------------
 
-export async function fetchCostData(client: unknown): Promise<CostData> {
+export async function fetchCostData(client: unknown, location?: { directory: string }): Promise<CostData> {
   const anyClient = client as any
-  const payload = await tryProvidersPayload(anyClient)
-  const documents = await tryConfigDocuments(anyClient)
+  const [payload, documents] = await Promise.all([tryProvidersPayload(anyClient, location), tryConfigDocuments(anyClient, location)])
+  if (!documents) return { rows: [], hasAuthoredConfig: false, configUnavailable: true }
 
   const authored = collectAuthored(documents)
   const authoredDefault = collectAuthoredDefault(documents)
@@ -166,15 +180,18 @@ export async function fetchCostData(client: unknown): Promise<CostData> {
     const providerName = str(provider?.name) || authoredProvider?.name || providerID
     const providerSource = str(provider?.source)
     const models = provider?.models && typeof provider.models === "object" ? provider.models : {}
-    const wanted = strict ? [...authoredProvider!.models.entries()] : Object.entries(models)
+    const wanted = authoredProvider ? authoredProvider.models.keys() : Object.keys(models)
 
-    for (const [modelID, authoredCost] of wanted) {
+    for (const modelID of wanted) {
+      const authoredCost = authoredProvider?.models.get(modelID)
       const key = `${providerID}/${modelID}`
       if (seen.has(key)) continue
       seen.add(key)
 
       const model = models[modelID]
-      const cost = model?.cost ?? (strict ? authoredCost : undefined)
+      // The server fills omitted cache fields with zero. Preserve the authored
+      // shape when a rate was configured so an omitted field stays unavailable.
+      const cost = authoredCost ?? model?.cost
       rows.push(
         makeRow({
           providerID,
@@ -184,7 +201,7 @@ export async function fetchCostData(client: unknown): Promise<CostData> {
           modelName: str(model?.name),
           cost,
           declaredInConfig: strict,
-          costFromConfig: strict && authoredCost != null,
+          costFromConfig: authoredCost != null,
           contextLimit: model?.limit?.context,
         }),
       )
@@ -221,7 +238,7 @@ export async function fetchCostData(client: unknown): Promise<CostData> {
   }
 
   rows.sort(compareRows)
-  return { rows, hasAuthoredConfig: strict }
+  return { rows, hasAuthoredConfig: strict, providerPricesUnavailable: !payload }
 }
 
 function makeRow(input: {
@@ -268,7 +285,8 @@ function collectAuthored(documents: any[]): Map<string, { name?: string; models:
         if (models && typeof models === "object") {
           for (const [modelID, rawModel] of Object.entries(models as Record<string, any>)) {
             if (!rawModel || typeof rawModel !== "object") continue
-            entry.models.set(modelID, (rawModel as any).cost)
+            const cost = rawModel.cost
+            if (cost !== undefined || !entry.models.has(modelID)) entry.models.set(modelID, cost)
           }
         }
         map.set(providerID, entry)
@@ -331,7 +349,7 @@ function compareRows(a: ModelRow, b: ModelRow): number {
  * - SDK `Model.cost`: { input, output, cache, tiers?, experimentalOver200K? }
  */
 export function normalizeTiers(cost: unknown): CostTier[] {
-  if (Array.isArray(cost)) return cost.map(normalizeConfigTier).sort(byTierSize)
+  if (Array.isArray(cost)) return cost.map(normalizeConfigTier).filter(hasRates).sort(byTierSize)
   if (!cost || typeof cost !== "object") return []
   const source = cost as any
 
@@ -343,11 +361,13 @@ export function normalizeTiers(cost: unknown): CostTier[] {
         output: num(entry?.output),
         cache: cacheOf(entry?.cache),
       }))
+      .filter(hasRates)
       .sort(byTierSize)
   }
 
   const tiers: CostTier[] = [
     {
+      tier: tierOf(source.tier),
       input: num(source.input),
       output: num(source.output),
       cache: cacheOf(source.cache) ?? flatCacheOf(source),
@@ -363,17 +383,22 @@ export function normalizeTiers(cost: unknown): CostTier[] {
       cache: cacheOf(over.cache) ?? flatCacheOf(over),
     })
   }
-  return tiers.sort(byTierSize)
+  return tiers.filter(hasRates).sort(byTierSize)
 }
 
 function normalizeConfigTier(entry: any): CostTier {
-  if (!entry || typeof entry !== "object") return { input: 0, output: 0 }
+  if (!entry || typeof entry !== "object") return {}
   return {
     tier: tierOf(entry.tier),
     input: num(entry.input),
     output: num(entry.output),
     cache: cacheOf(entry.cache) ?? flatCacheOf(entry),
   }
+}
+
+function hasRates(tier: CostTier): boolean {
+  return tier.input !== undefined || tier.output !== undefined ||
+    tier.cache?.read !== undefined || tier.cache?.write !== undefined
 }
 
 function byTierSize(a: CostTier, b: CostTier): number {
@@ -407,8 +432,8 @@ function flatCacheOf(source: any): { read?: number; write?: number } | undefined
   }
 }
 
-function num(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0
+function num(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
 }
 
 function str(value: unknown): string | undefined {
@@ -420,8 +445,8 @@ function str(value: unknown): string | undefined {
 // ---------------------------------------------------------------------------
 
 /** "$15", "$3.25", "$0.3", "$1.2e-7" — compact but precise for sub-dollar rates. */
-export function fmtMoney(value: number): string {
-  if (!Number.isFinite(value)) return "?"
+export function fmtMoney(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "—"
   if (value === 0) return "$0"
   if (Math.abs(value) >= 1) return `$${trimZeros(value.toFixed(2))}`
   if (Math.abs(value) >= 0.001) return `$${trimZeros(value.toFixed(4))}`
@@ -441,17 +466,15 @@ export function fmtK(tokens: number): string {
 }
 
 /**
- * "in $6 · out $22" — the input/output price line: the badge's first row and
- * the first half of the dialog row's price line. The unit lives in the dialog
- * title, not in every line.
+ * Compact input/output price summary for the picker and footer.
  */
 export function fmtRatesTop(tier: CostTier): string {
   return `in ${fmtMoney(tier.input)} · out ${fmtMoney(tier.output)}`
 }
 
-/** "cache read $0.55 · cache write $5.5" — the badge's second row and the dialog price line's second half. */
-export function fmtRatesCache(tier: CostTier): string {
-  return `cache read ${fmtMoney(tier.cache?.read ?? 0)} · cache write ${fmtMoney(tier.cache?.write ?? 0)}`
+/** "cache read $0.55 · cache write $5.5" — the cache portion of a details line. */
+function fmtRatesCache(tier: CostTier): string {
+  return `cache read ${fmtMoney(tier.cache?.read)} · cache write ${fmtMoney(tier.cache?.write)}`
 }
 
 /** All four rates on one line — the dialog description and extra-tier lines. */
@@ -459,44 +482,11 @@ export function fmtRates(tier: CostTier): string {
   return `${fmtRatesTop(tier)} · ${fmtRatesCache(tier)}`
 }
 
-/** Dialog description: all four rates on one line beside the model title. */
-export function fmtRow(row: ModelRow): string {
-  if (row.tiers.length === 0) return "cost not set (catalog default)"
-  return fmtRates(row.tiers[0])
-}
-
-/**
- * Full-width lines under a dialog row, never clipped by the title: the meta
- * line, then every extra tier in full — so the whole information is visible
- * without a separate detail view.
- */
-export function fmtRowDetails(row: ModelRow): string[] {
-  if (row.tiers.length === 0) return []
-  const lines: string[] = []
-  const meta = fmtRowMeta(row)
-  if (meta) lines.push(meta)
-  for (const extra of row.tiers.slice(1)) {
-    lines.push((extra.tier && extra.tier.size > 0 ? `over ${fmtK(extra.tier.size)} ctx: ` : "") + fmtRates(extra))
-  }
-  return lines
-}
-
-/** Meta line under a dialog row: first-tier context marker and the model's context limit. */
-export function fmtRowMeta(row: ModelRow): string {
-  if (row.tiers.length === 0) return ""
-  const parts: string[] = []
-  const tier = row.tiers[0]
-  if (tier.tier && tier.tier.size > 0) parts.push(`over ${fmtK(tier.tier.size)} ctx`)
-  if (row.contextLimit && row.contextLimit > 0) parts.push(`ctx ${fmtK(row.contextLimit)}`)
-  return parts.join(" · ")
-}
-
-/** Prompt badge text: all four rates plus an extra-tiers marker. Empty when there is no cost info. */
+/** Compact footer summary of base input and output rates. */
 export function fmtBadge(row: ModelRow): string {
-  if (row.tiers.length === 0) return ""
-  let text = fmtRates(row.tiers[0])
-  if (row.tiers.length > 1) text += ` · +${row.tiers.length - 1} tiers`
-  return text
+  const base = row.tiers.find((tier) => !tier.tier)
+  if (!base || (base.input === undefined && base.output === undefined)) return ""
+  return `${fmtRatesTop(base)} / 1M tokens`
 }
 
 // ---------------------------------------------------------------------------
@@ -519,6 +509,10 @@ export type DialogSize = (typeof DIALOG_PRESETS)[number]["size"]
  * minor host-side drift. Lines wider than every preset still open, on xlarge,
  * where the host clips them.
  */
+export function fitsDialogWidth(contentWidth: number, terminalWidth: number): boolean {
+  return contentWidth + 14 <= Math.min(terminalWidth - 4, DIALOG_PRESETS[2].width)
+}
+
 export function fitDialogSize(lines: readonly string[]): DialogSize {
   const widest = Math.max(0, ...lines.map((line) => line.length))
   return DIALOG_PRESETS.find((preset) => widest <= preset.width - 14)?.size ?? "xlarge"

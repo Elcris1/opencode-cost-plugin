@@ -420,3 +420,21 @@ Deltas discovered while implementing, verified against the live npm package `@op
   persists like the built-in flow. The dialog is skipped when the host exposes no variant API, the
   model has no variants, or the model pick failed to apply.
 
+
+## 13. Integration and pilot changes
+
+The price browser now opens details on Enter. Switching is a separate action available only
+when the session that opened the browser is still active. The router is the source of session
+identity. The footer is opt-in via `options.footer` on the CLI plugin entry, uses the native
+status slot, and shows base input and output rates only. The command chooses the native picker when the table does not fit.
+
+Rates retain missing values and identify config overrides or catalog rates in details. The
+loader checks config declarations before deciding whether to show the wider configured catalog.
+OpenCode 2.3.2 supplies catalog data through `client.model.list()` and `client.provider.list()`;
+the earlier `client.config.providers()` shape remains supported. Server-normalized model
+metadata supplies display names and limits. Authored cost shapes preserve omitted cache fields
+that the server may otherwise fill with zero.
+
+The root `opencode.json` is a local integration fixture with synthetic prices and a loopback
+endpoint. The package allowlist excludes the fixture. The release checklist and team pilot scope
+are in `REVIEW_AND_RELEASE_PLAN.md`.
