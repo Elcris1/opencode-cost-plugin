@@ -1,0 +1,23 @@
+name: Feature suggestion
+description: Suggest an improvement to the plugin.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: What are you trying to do?
+      description: Describe your workflow and where the plugin falls short.
+    validations:
+      required: true
+  - type: textarea
+    id: desired-behavior
+    attributes:
+      label: What would you like to happen?
+      description: Describe how you would want the plugin to behave in that situation.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Share any workaround, example, mockup, or related issue that helps explain the suggestion.

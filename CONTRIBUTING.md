@@ -29,5 +29,5 @@ When reporting an issue, include the OpenCode version, terminal width, reproduct
 | [src/costs.ts](src/costs.ts) | OpenCode client lookups, price normalization, and formatting |
 | [opencode.json](opencode.json) | Checkout-only integration fixture |
 | [docs/design.md](docs/design.md) | Design history and implementation notes |
-| [docs/release-plan.md](docs/release-plan.md) | Publication and maintenance plan |
+| [docs/release-plan.md](docs/release-plan.md) | Publication setup, release workflow, and maintenance plan |
 | [docs/images](docs/images) | README images captured from the demo fixture |

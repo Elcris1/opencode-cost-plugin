@@ -1,0 +1,93 @@
+name: Release to npm and GitHub
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'Elcris1/opencode-cost-plugin'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '26.4.0'
+          registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
+
+      - name: Validate tag and extract release notes
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Expected a stable release tag matching package.json (v$version)." >&2
+            exit 1
+          fi
+          awk -v heading="## $version — " '
+            /^## / { if (found) exit; found = index($0, heading) == 1 }
+            found && !/^## / { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/release-notes.md"; then
+            echo "Missing release notes for $version in CHANGELOG.md." >&2
+            exit 1
+          fi
+
+      - name: Install and typecheck
+        run: |
+          npm ci
+          npx --no-install tsc --noEmit
+
+      - name: Pack release
+        run: npm pack --json --pack-destination "$RUNNER_TEMP" > "$RUNNER_TEMP/pack.json"
+
+      - name: Publish package with npm Trusted Publishing
+        run: |
+          pack="$RUNNER_TEMP/pack.json"
+          filename="$(node -p 'require(process.argv[1])[0].filename' "$pack")"
+          integrity="$(node -p 'require(process.argv[1])[0].integrity' "$pack")"
+          version="${GITHUB_REF_NAME#v}"
+          metadata="$RUNNER_TEMP/npm-version.json"
+          status="$(curl --silent --show-error --retry 2 --output "$metadata" --write-out '%{http_code}' \
+            "https://registry.npmjs.org/opencode-model-costs/$version")"
+          case "$status" in
+            404)
+              npm publish "$RUNNER_TEMP/$filename"
+              ;;
+            200)
+              published="$(node -p 'require(process.argv[1]).dist.integrity' "$metadata")"
+              if [[ "$published" != "$integrity" ]]; then
+                echo "This version is already on npm with different contents." >&2
+                exit 1
+              fi
+              echo "The same tarball is already published."
+              ;;
+            *)
+              echo "npm registry returned HTTP $status." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "GitHub release already exists."
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"

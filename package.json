@@ -24,7 +24,18 @@
     "typescript": "5.9.3"
   },
   "author": {
-    "name": "Elcris1",
-    "email": "eloicp10@gmail.com"
+    "name": "Elcris1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Elcris1/opencode-cost-plugin.git"
+  },
+  "homepage": "https://github.com/Elcris1/opencode-cost-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/Elcris1/opencode-cost-plugin/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }
