@@ -3,6 +3,11 @@
 All notable changes to `opencode-model-costs` per released version, newest first.
 On every version bump, add an entry here at the top.
 
+## 0.5.3 — 2026-11-20
+
+- Documented installing the plugin from npm globally or per project, pinning a
+  release, and configuring the footer for an npm installation.
+
 ## 0.5.2 — 2026-11-20
 
 - Fixed `/models-cost` so switching between globally configured and

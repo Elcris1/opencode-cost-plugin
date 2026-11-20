@@ -6,21 +6,27 @@ Compare input, output, and cache prices across models without leaving the [OpenC
 
 The screenshot uses the repository’s synthetic pricing fixture.
 
-## Install from source
+## Install from npm
 
-This plugin targets **OpenCode 2.3.2**. Installing the pinned OpenTUI dependencies with npm requires **Node.js 26.4.0 or later**.
+This plugin targets **OpenCode 2.3.2**. Run this command to install it and add it to your global OpenCode config. [OpenCode plugin commands](https://opencode.ai/docs/cli/commands/#plugin)
 
-1. Download or clone this repository.
-2. Run `npm ci` in the checkout.
-3. Add the checkout’s absolute path to the `plugins` array in your project’s `opencode.json(c)`. For all projects, use your global OpenCode config instead.
+```sh
+opencode plugin add opencode-model-costs
+```
+
+Start or restart OpenCode and run `/models-cost`.
+
+### Install for one project
+
+Add `opencode-model-costs` to the `plugins` array in the project’s `opencode.json` or `opencode.jsonc`.
 
 ```json
 {
-  "plugins": ["/absolute/path/to/opencode-model-costs"]
+  "plugins": ["opencode-model-costs"]
 }
 ```
 
-Open OpenCode in your project and run `/models-cost`. From the checkout itself, the included [demo config](opencode.json) loads the plugin automatically. Run `opencode --standalone` there to try it with synthetic rates. The demo providers point to a loopback endpoint for browsing and session selection.
+OpenCode installs the plugin from npm when it loads the configuration. To pin a release, use `opencode-model-costs@0.5.3` in the `plugins` array or as the argument to `opencode plugin add`. [OpenCode plugin configuration](https://opencode.ai/docs/build/plugins/#load)
 
 ## Browse and switch models
 
@@ -35,7 +41,7 @@ Open OpenCode in your project and run `/models-cost`. From the checkout itself, 
 
 ## Configure the footer
 
-By default, the footer shows the current model’s base rates on a separate row below the prompt status line. It includes cache read and write when pricing is available and the line fits. On narrow terminals it shows input and output only. To hide it on OpenCode 2.3.2, set `footer: false` on the plugin entry in your terminal client’s `cli.json` (typically `~/.config/opencode/cli.json`). Use the same plugin path as in the install step.
+By default, the footer shows the current model’s base rates on a separate row below the prompt status line. It includes cache read and write when pricing is available and the line fits. On narrow terminals it shows input and output only. To hide it on OpenCode 2.3.2, set `footer: false` on the plugin entry in your terminal client’s `cli.json` (typically `~/.config/opencode/cli.json`). Use the same package reference as in your `opencode.json(c)`.
 
 ![Prompt footer showing input, output, cache read, and cache write rates on their own row](docs/images/model-costs-footer.png)
 
@@ -43,7 +49,7 @@ By default, the footer shows the current model’s base rates on a separate row 
 {
   "plugins": [
     {
-      "package": "/absolute/path/to/opencode-model-costs",
+      "package": "opencode-model-costs",
       "options": { "footer": false }
     }
   ]
@@ -82,6 +88,8 @@ Use an array of cost entries for tiered pricing. A context tier adds `"tier": { 
 
 ## Contribute
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup and hands-on verification steps. The [changelog](CHANGELOG.md) records releases.
+To run from source, clone this repository and run `npm ci` with Node.js 26.4.0 or later. Run `opencode --standalone` in the checkout to try the included demo config with synthetic rates. To use the checkout in another project, add its absolute path to that project’s `plugins` array.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for hands-on verification steps. The [changelog](CHANGELOG.md) records releases.
 
 Released under the [MIT License](LICENSE).
