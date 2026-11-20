@@ -3,6 +3,13 @@
 All notable changes to `opencode-model-costs` per released version, newest first.
 On every version bump, add an entry here at the top.
 
+## 0.5.2 — 2026-11-20
+
+- Fixed `/models-cost` so switching between globally configured and
+  project-configured models updates the composer in the same session.
+- Added home-screen model and reasoning-effort selection for the first prompt.
+  OpenCode starts the session when you submit that prompt.
+
 ## 0.5.1 — 2026-11-20
 
 - Enabled the price footer by default and restored its own row below the prompt
