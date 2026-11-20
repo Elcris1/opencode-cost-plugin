@@ -1,5 +1,7 @@
 # PLAN — `opencode-model-costs` (OpenCode V2 plugin)
 
+> Historical design and implementation notes. See [Integration and pilot changes](#13-integration-and-pilot-changes) for the current behavior and the [README](../README.md) for setup.
+
 Show the **cost information of the models declared in `opencode.json`** inside the OpenCode TUI:
 
 1. A `/model-costs` palette + slash command that opens a dialog listing every declared model with its
@@ -437,4 +439,4 @@ that the server may otherwise fill with zero.
 
 The root `opencode.json` is a local integration fixture with synthetic prices and a loopback
 endpoint. The package allowlist excludes the fixture. The release checklist and team pilot scope
-are in `REVIEW_AND_RELEASE_PLAN.md`.
+are in [release plan](release-plan.md).

@@ -16,9 +16,9 @@ OpenCode V2 loads a minimal server entry and the `./tui` export from a single pl
 
 **Keep the interface compact.** Keep the provider-grouped table at widths that fit. Use the native searchable picker at narrow widths, with cache rates and context tiers in model details. Make the footer opt-in and use one muted line in the native slot, without the extra row and per-frame overlay positioning.
 
-## Current verification
+## Initial review findings
 
-Typechecking fails on `onMount` and `createEffect`. The installed Solid 2.0.3 and OpenTUI Solid 0.9.4 differ from the versions declared by the installed OpenCode SDK 2.3.2. Live TUI behavior still needs verification.
+At the time of the initial review, typechecking failed on `onMount` and `createEffect`. The installed Solid 2.0.3 and OpenTUI Solid 0.9.4 differ from the versions declared by the installed OpenCode SDK 2.3.2. The 0.5.0 release work subsequently aligned the dependencies and verified the integration in OpenCode 2.3.2.
 
 ## Package publication and maintenance
 

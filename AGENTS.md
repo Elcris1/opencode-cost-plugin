@@ -1,18 +1,18 @@
 # AGENTS.md
 
-OpenCode V2 plugin that shows per-model cost info in the TUI (`/models-cost` dialog + prompt-footer badge). `PLAN.md` is the design spec and "as built" record — read it before changing behavior.
+OpenCode V2 plugin that shows per-model cost info in the TUI (`/models-cost` dialog + prompt-footer badge). `docs/design.md` is the design spec and "as built" record — read it before changing behavior.
 
 ## No build, no tests — verify with typecheck + live reload
 
 - OpenCode runs the TypeScript directly. There is no build step, no test suite, and no npm scripts.
 - The only automated check: `npx tsc --noEmit` (tsconfig is editor support only; `noEmit`, `allowImportingTsExtensions`).
 - Real verification is manual: enable the plugin via a `plugins` entry (absolute path) in a project `opencode.json` or global `~/.config/opencode/opencode.json`, run OpenCode 2.x, and check the server log (`~/.local/share/opencode/log/opencode.log`) for plugin load errors. `/reload` picks up changes to the plugin's own code.
-- Peer deps (`@opentui/core`, `@opentui/solid`, `solid-js`) must be installed inside this folder (`npm install`); OpenCode resolves `@opencode/plugin` itself, but JSX peers are the plugin's responsibility.
+- Peer deps (`@opentui/core`, `@opentui/solid`, `solid-js`) must be installed inside this folder (`npm ci`); OpenCode resolves `@opencode/plugin` itself, but JSX peers are the plugin's responsibility.
 
 ## Structure
 
 - `src/index.ts` — server part. Intentionally does nothing, but must exist: the single `plugins` entry loads both parts through it.
-- `src/costs.ts` — data + formatting layer (no UI imports). Data comes from two best-effort server calls, never from reading config files: `client.config.providers()` (merged costs, catalog defaults) and `client.config.get()` (authoring facts — what's literally declared/`cost`-set in opencode.json(c)). The server resolves env/file substitutions and config precedence; don't reimplement that here.
+- `src/costs.ts` — data + formatting layer (no UI imports). Data comes from the OpenCode client. The loader supports `client.model.list()` and `client.provider.list()` as well as the older `client.config.providers()` response. It uses `client.config.get()` for declarations and explicit cost overrides. The server resolves env/file substitutions and config precedence; don't reimplement that here.
 - `src/tui.tsx` — TUI part (JSX, `jsxImportSource: @opentui/solid`): slash/palette command, dialog, footer badge.
 
 ## Conventions that differ from defaults
